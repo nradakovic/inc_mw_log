@@ -10,14 +10,220 @@
 
 ### Assumptions of Use
 
-| ID | Rating | Type | Summary | Details |
-|----|--------|------|---------|---------|
-| REQ-002 | Approved | Requirement | Undocumented or private API from mw::log SHALL NOT be used. | (1) Threads:	mw::log API documented and tagged `\thread-safe` shall be thread safe. (2) Signal handler:	mw::log API SHALL NOT be called from signal handlers. (3) Interrupt handler:	mw::log API SHALL NOT be called from interrupt handlers. Note_1: The majority of the mw::log API is thread-safe. Thread-safe API can be recognized by the `\thread-safe` tag in the documentation. Note_2: LogStream classes are NOT thread-safe.|
-| REQ-003 | Approved | Requirement | mw::log API SHALL NOT be used from unsupported contexts. | |
-| REQ-004 | Approved | Requirement | Unbounded runtime behavior of mw::log initialization shall be mitigated or tolerated. | |
-| REQ-005 | Approved | Requirement | mw::log SHALL NOT be used during the C++ static storage construction and destruction. | |
-| REQ-006 | Content Review | Requirement | Console Logging shall not be used in production. | |
-| REQ-007 | Approved | Requirement | Applications SHALL NOT rely on mw::log output for safety verification. | |
+#### REQ-002 — Undocumented or private API from mw::log SHALL NOT be used.
+
+| | |
+|---|---|
+| ID | REQ-002 |
+| Rating | Approved |
+| Type | Requirement |
+
+**Details:**
+
+Note_1: The public API of mw::log is contained in the `mw::log` namespace and is annotated with the documentation tag `\public`. Everything else is considered part of the private API and shall not be used. Entities from any implementation `details` namespace SHALL NOT be used.
+
+Note_2: In the following example, the `TextRecorder` class is part of a detail namespace and SHALL NOT be used directly. It may be used indirectly but only though public API:
+
+```cpp
+namespace mw
+namespace log
+{
+namespace detail //
+{
+
+class TextRecorder : public Recorder // Private undocumented API SHALL NOT be used.
+{
+    // ...
+};
+
+} // namespace detail
+
+/*
+ * \public
+ */
+LogStream LogInfo(); // Public API is OK to be used by Safety-Related Application Software.
+
+} // namespace log
+} // namespace mw
+```
+
+---
+
+#### REQ-003 — mw::log API SHALL NOT be used from unsupported contexts.
+
+| | |
+|---|---|
+| ID | REQ-003 |
+| Rating | Approved |
+| Type | Requirement |
+
+**Details:**
+
+(1) Threads: mw::log API documented and tagged `\thread-safe` shall be thread safe.
+
+(2) Signal handler: mw::log API SHALL NOT be called from signal handlers.
+
+(3) Interrupt handler: mw::log API SHALL NOT be called from interrupt handlers.
+
+Note_1: The majority of the mw::log API is thread-safe. Thread-safe API can be recognized by the `\thread-safe` tag in the documentation:
+
+```cpp
+class Logger
+{
+    /// \brief Creates a LogStream to log messages of criticality `Fatal` (highest).
+    ///
+    /// \public
+    /// \thread-safe
+    ///
+    /// \details Fatal shall be used on errors that cannot be recovered and will lead to an overall failure in the
+    /// system. The message will be logged under the context that was provided on construction.
+    ///
+    /// \return LogStream which can be used stream verbose logging messages (will be flushed on destruction)
+    log::LogStream LogFatal() const noexcept;
+};
+```
+
+Note_2: LogStream classes are NOT thread-safe. For example, here is some code of what NOT to do with LogStream classes:
+
+```cpp
+auto log_stream = logger.LogInfo();
+
+std::thread t1([&](){
+    // Do not access log_stream from another thread!
+    log_stream << "test";
+});
+
+log_stream << "hello";
+```
+
+Note_3: Refer to the README (master) for further details of the usage of the mw::log library.
+
+---
+
+#### REQ-004 — Unbounded runtime behavior of mw::log initialization shall be mitigated or tolerated.
+
+| | |
+|---|---|
+| ID | REQ-004 |
+| Rating | Approved |
+| Type | Requirement |
+
+**Details:**
+
+Safety-Related Platform Software and Safety-Related Application Software shall mitigate or tolerate unbounded runtime behavior of the mw::log initialization.
+
+Note_1: Due to dynamic memory pre-allocation during the initialization phase of mw::log the runtime behavior of the initialization phase is unbounded and indeterministic.
+
+Note_2: Safety-Related Platform Software and Safety-Related Application Software shall initialize the library by sending any log message with arbitrary content, log level and context. This shall be done in an early uncritical phase of the program.
+
+```cpp
+void InitializeMwLog() {
+
+    mw::log::LogInfo() << "Initializing"; // Do not initialize mw::log in a critical section of the program.
+
+    // After initialization, the mw::log library has deterministic and upper-bounded runtime behavior.
+}
+```
+
+Note_3: Safety-Related Platform Software and Safety-Related Application Software SHALL NOT initialize mw::log in a runtime critical section:
+
+```cpp
+void CalculateTrajectory(){
+     if (SensorValueMissing()) {
+        mw::log::LogError() << "Sensor Error"; // If mw::log has not been initialized before, the runtime behavior may be unbounded here.
+        StartRecoveryMechanism():
+    }
+    // ...
+}
+
+
+int main() {
+    // mw::log::LogInfo() << "Initialize"; // Uncomment this to ensure deterministic runtime behavior of mw::log in the remaining execution.
+     while(/* */){
+        CalculateTrajectory();
+    }
+}
+```
+
+Note_4: This requirement shall be verified for each assigned application. The whole dependency tree of ALL included libraries shall be also verified on this requirement in the application use case and by application developers.
+Application developer shall not make any assumptions about mw::log usage and initialization in the dependent libraries, but verify the mw::log usage based on available documentation and the source code.
+
+Note_5: For any library which is used there it needs to be ensured that the library provides its safety-related functionality and properties correctly as specified in the safety applications design, satisfying its allocated safety requirements.
+
+---
+
+#### REQ-005 — mw::log SHALL NOT be used during the C++ static storage construction and destruction.
+
+| | |
+|---|---|
+| ID | REQ-005 |
+| Rating | Approved |
+| Type | Requirement |
+
+**Details:**
+
+Safety-Related Platform Software and Safety-Related Application Software SHALL NOT use mw::log during C++ static storage initialization and destruction [ 1, 2 ].
+
+Note_1: Safety-Related Platform Software and Safety-Related Application Software SHALL NOT use mw::log in construction or destruction of an object with static storage duration:
+
+```cpp
+struct MyClass {
+    MyClass() {
+        mw::log::LogInfo() << "MyClass()"; // mw::log SHALL NOT be used before entering main().
+    }
+    ~MyClass() {
+        mw::log::LogInfo() << "MyClass()"; // mw::log SHALL NOT be used after exiting main().
+    }
+};
+
+
+static MyClass singleton{};
+```
+
+Note_2: Safety-Related Platform Software and Safety-Related Application Software SHALL NOT use mw::log before entering and after exiting main().
+
+[1] https://en.cppreference.com/w/cpp/language/initialization
+
+[2] https://eel.is/c++draft/basic.start#static
+
+---
+
+#### REQ-006 — Console Logging shall not be used in production.
+
+| | |
+|---|---|
+| ID | REQ-006 |
+| Rating | Content Review |
+| Type | Requirement |
+
+---
+
+#### REQ-007 — Applications SHALL NOT rely on mw::log output for safety verification/qualification/case.
+
+| | |
+|---|---|
+| ID | REQ-007 |
+| Rating | Approved |
+| Type | Requirement |
+
+**Details:**
+
+Safety-Related Platform Software and Safety-Related Application Software SHALL NOT rely on the presence of any form of mw::log output for delivering their business logic. This shall hold even for logs sent out by the application itself.
+
+Note_1: Safety-Related Platform Software and Safety-Related Application Software behavior shall not depend on log messages:
+
+```cpp
+void Step() {
+    // Do not rely on log messages!
+    if ( ReceiveStopLogMessage() ) {
+
+        ExecuteStopCommand();
+
+    }
+    // ...
+```
+
+Note_2: This requirement shall be verified for each assigned application. The whole dependency tree of ALL included libraries shall be also verified on this requirement in the application use case and by application developers.
 
 ### mw::log Configuration
 
